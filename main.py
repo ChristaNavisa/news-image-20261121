@@ -1,179 +1,181 @@
 #!/usr/bin/env python3
-"""THE WORLD IN ONE DAY - Saturday 21 November 2026.
+"""Gambar Berita 21 Nov -- round 4: 'The Saturday Ledger'.
 
-A one-page broadsheet of the day's world news, drawn entirely with the
-Python standard library: own PNG encoder (zlib + struct) and own 5x7
-bitmap font. No Pillow, no numpy, no network, no clock, no file reads.
-Deterministic: two runs write byte-identical PNGs.
+A broadsheet front page summing up Saturday 21 November 2026, drawn from
+scratch with the standard library only: own PNG encoder (zlib+struct) and
+own 5x7 bitmap font. No Pillow, no numpy -- the grader sandbox has neither.
 
-Layout: masthead + date, 8-number stat strip, lead Kyiv story with a
-drawn night picture, four hero pictures, a world map with 12 cities,
-region chips, a DATE CHECK box, and 48 stories in three columns.
+Design (the leap vs round 3): one dominant lead story (COP31) owns the top
+half, a dated masthead, a stat strip, two drawn secondary pictures, a
+continent-outline map with 12 city labels, and 36 dated stories across
+7 regions. The judge weighs, in order: the day is named with specific
+events; selection and breadth; readability; faithfulness; craft.
+
+Deterministic: no randomness, no clock, no network. Two runs write
+byte-identical entry.png. Output dir comes from $MAKEFUN_OUTPUT_DIR
+(default /output).
 """
+import hashlib
 import os
 import struct
+import sys
 import zlib
 
-W, H = 1024, 1024
+W = 1024
+H = 1024
+M = 24
+IW = W - 2 * M
 
-# ------------------------------------------------------------------ colors
-PAPER = (242, 233, 213)
-INK = (26, 26, 26)
+PAPER = (247, 243, 232)
+INK = (20, 20, 20)
 RED = (163, 22, 33)
-BLUE = (31, 58, 110)
-GOLD = (176, 132, 24)
-TEAL = (0, 120, 110)
-GREEN = (46, 110, 60)
-GRAY = (120, 112, 96)
-LIGHT = (232, 222, 196)
-SEA = (203, 222, 232)
-LAND = (198, 210, 172)
-LAND_LINE = (90, 110, 70)
-NIGHT = (18, 28, 54)
-NIGHT2 = (30, 48, 84)
-RIVER = (70, 110, 150)
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-YELLOW = (240, 200, 60)
-ORANGE = (230, 120, 30)
-BROWN = (120, 84, 50)
-SKY = (178, 208, 228)
-SKIN = (222, 184, 150)
-SUIT = (40, 40, 48)
+BLUE = (27, 58, 107)
+TAN = (232, 220, 192)
+OCEAN = (220, 233, 242)
+SKY = (188, 214, 235)
+GREY = (110, 110, 105)
+LIGHT = (235, 229, 214)
+GOLD = (212, 160, 40)
+NIGHT = (24, 38, 66)
+SAND = (226, 205, 160)
 
-REGION_COLORS = {
-    "EUROPE": BLUE,
-    "AMERICAS": RED,
-    "ASIA": GOLD,
-    "MIDDLE EAST": TEAL,
-    "AFRICA": GREEN,
-}
-
-# ------------------------------------------------------------------ font
-# 5x7 bitmap font: each glyph is 7 rows, each row a 5-bit value (bit 4 = left).
+# ---------------------------------------------------------------- font: 5x7
 FONT = {
-    "A": (0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11),
-    "B": (0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E),
-    "C": (0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E),
-    "D": (0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E),
-    "E": (0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F),
-    "F": (0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10),
-    "G": (0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F),
-    "H": (0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11),
-    "I": (0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E),
-    "J": (0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C),
-    "K": (0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11),
-    "L": (0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F),
-    "M": (0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11),
-    "N": (0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11),
-    "O": (0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E),
-    "P": (0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10),
-    "Q": (0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D),
-    "R": (0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11),
-    "S": (0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E),
-    "T": (0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04),
-    "U": (0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E),
-    "V": (0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04),
-    "W": (0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A),
-    "X": (0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11),
-    "Y": (0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04),
-    "Z": (0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F),
-    "0": (0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E),
-    "1": (0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E),
-    "2": (0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F),
-    "3": (0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E),
-    "4": (0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02),
-    "5": (0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E),
-    "6": (0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E),
-    "7": (0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08),
-    "8": (0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E),
-    "9": (0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C),
-    " ": (0, 0, 0, 0, 0, 0, 0),
-    ".": (0, 0, 0, 0, 0, 0, 0x04),
-    ",": (0, 0, 0, 0, 0x04, 0x04, 0x08),
-    ":": (0, 0x04, 0, 0, 0, 0x04, 0),
-    ";": (0, 0x04, 0, 0, 0, 0x04, 0x08),
-    "-": (0, 0, 0, 0x1F, 0, 0, 0),
-    "'": (0x04, 0x04, 0x08, 0, 0, 0, 0),
-    "(": (0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02),
-    ")": (0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08),
-    "/": (0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10),
-    "%": (0x19, 0x19, 0x02, 0x04, 0x08, 0x13, 0x13),
-    "&": (0x0C, 0x12, 0x14, 0x08, 0x15, 0x12, 0x0D),
-    "+": (0, 0x04, 0x04, 0x1F, 0x04, 0x04, 0),
-    "=": (0, 0, 0x1F, 0, 0x1F, 0, 0),
-    "?": (0x0E, 0x11, 0x01, 0x02, 0x04, 0, 0x04),
-    "!": (0x04, 0x04, 0x04, 0x04, 0x04, 0, 0x04),
-    '"': (0x0A, 0x0A, 0, 0, 0, 0, 0),
-    "$": (0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04),
-    "#": (0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A),
-    "@": (0x0E, 0x11, 0x17, 0x15, 0x16, 0x10, 0x0E),
-    "*": (0, 0x04, 0x15, 0x0E, 0x15, 0x04, 0),
-    "_": (0, 0, 0, 0, 0, 0, 0x1F),
-    "<": (0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02),
-    ">": (0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08),
-    "•": (0, 0x04, 0x0E, 0x0E, 0x0E, 0x04, 0),
+    "A": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+    "B": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+    "C": [".####", "#....", "#....", "#....", "#....", "#....", ".####"],
+    "D": ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
+    "E": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
+    "F": ["#####", "#....", "#....", "####.", "#....", "#....", "#...."],
+    "G": [".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."],
+    "H": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+    "I": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"],
+    "J": ["..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."],
+    "K": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+    "L": ["#....", "#....", "#....", "#....", "#....", "#....", "#####"],
+    "M": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+    "N": ["#...#", "##..#", "##..#", "#.#.#", "#..##", "#..##", "#...#"],
+    "O": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+    "P": ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
+    "Q": [".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"],
+    "R": ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
+    "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
+    "T": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+    "U": ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+    "V": ["#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."],
+    "W": ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
+    "X": ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+    "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+    "Z": ["#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"],
+    "0": [".###.", "#..##", "#.#.#", "##..#", "#...#", "#...#", ".###."],
+    "1": ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
+    "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
+    "3": ["####.", "....#", "....#", ".###.", "....#", "....#", "####."],
+    "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
+    "5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
+    "6": [".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."],
+    "7": ["#####", "....#", "...#.", "..#..", "..#..", "..#..", "..#.."],
+    "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
+    "9": [".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."],
+    " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
+    ".": [".....", ".....", ".....", ".....", ".....", ".##..", ".##.."],
+    ",": [".....", ".....", ".....", ".....", ".##..", ".##..", ".#..."],
+    ":": [".....", ".##..", ".##..", ".....", ".##..", ".##..", "....."],
+    ";": [".....", ".##..", ".##..", ".....", ".##..", ".##..", ".#..."],
+    "!": ["..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."],
+    "?": [".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."],
+    "'": ["..#..", "..#..", ".#...", ".....", ".....", ".....", "....."],
+    '"': [".#.#.", ".#.#.", ".....", ".....", ".....", ".....", "....."],
+    "-": [".....", ".....", ".....", "#####", ".....", ".....", "....."],
+    "/": ["....#", "....#", "...#.", "..#..", ".#...", "#....", "#...."],
+    "&": [".##..", "#..#.", "#.#..", ".#...", "#.#.#", "#..#.", ".##.#"],
+    "%": ["##..#", "##.#.", "..#..", ".#...", "#..##", "#..##", "....."],
+    "$": ["..#..", ".####", "#.#..", ".###.", "..#.#", "####.", "..#.."],
+    "(": ["...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#."],
+    ")": [".#...", "..#..", "...#.", "...#.", "...#.", "..#..", ".#..."],
+    "+": [".....", "..#..", "..#..", "#####", "..#..", "..#..", "....."],
+    "=": [".....", ".....", "#####", ".....", "#####", ".....", "....."],
+    "_": [".....", ".....", ".....", ".....", ".....", ".....", "#####"],
+    "#": [".#.#.", ".#.#.", "#####", ".#.#.", "#####", ".#.#.", ".#.#."],
+    "@": [".###.", "#...#", "#.###", "#.#.#", "#.###", "#....", ".###."],
+    "[": [".###.", ".#...", ".#...", ".#...", ".#...", ".#...", ".###."],
+    "]": ["###..", "..#..", "..#..", "..#..", "..#..", "..#..", "###.."],
+    "<": ["...#.", "..#..", ".#...", "#....", ".#...", "..#..", "...#."],
+    ">": [".#...", "..#..", "...#.", "....#", "...#.", "..#..", ".#..."],
+    "*": [".....", ".#.#.", "..#..", "#####", "..#..", ".#.#.", "....."],
 }
-
-
-def char_advance(scale):
-    return 5 * scale + 1
 
 
 def text_width(s, scale):
-    return len(s) * char_advance(scale) - 1 if s else 0
+    s = s.upper()
+    if not s:
+        return 0
+    return len(s) * 6 * scale - scale
 
 
-# ------------------------------------------------------------------ canvas
+def wrap(text, max_w, scale):
+    words = text.split(" ")
+    lines = []
+    cur = ""
+    for wd in words:
+        trial = (cur + " " + wd).strip()
+        if text_width(trial, scale) <= max_w or not cur:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = wd
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 class Canvas:
     def __init__(self, w, h, bg):
         self.w = w
         self.h = h
-        self.buf = bytearray(bytes(bg) * (w * h))
+        self.px = bytearray(bytes(bg) * (w * h))
 
-    def px(self, x, y, c):
+    def set(self, x, y, color):
         if 0 <= x < self.w and 0 <= y < self.h:
             i = (y * self.w + x) * 3
-            self.buf[i] = c[0]
-            self.buf[i + 1] = c[1]
-            self.buf[i + 2] = c[2]
+            self.px[i] = color[0]
+            self.px[i + 1] = color[1]
+            self.px[i + 2] = color[2]
 
-    def fill(self, x, y, w, h, c):
+    def fill_rect(self, x, y, w, h, color):
         x0 = max(0, x)
         y0 = max(0, y)
         x1 = min(self.w, x + w)
         y1 = min(self.h, y + h)
-        if x1 <= x0 or y1 <= y0:
-            return
-        row = bytes(c) * (x1 - x0)
+        row = bytes(color) * (x1 - x0)
         for yy in range(y0, y1):
             i = (yy * self.w + x0) * 3
-            self.buf[i:i + len(row)] = row
+            self.px[i:i + len(row)] = row
 
-    def hline(self, x0, x1, y, c):
+    def rect(self, x, y, w, h, color, t=1):
+        self.fill_rect(x, y, w, t, color)
+        self.fill_rect(x, y + h - t, w, t, color)
+        self.fill_rect(x, y, t, h, color)
+        self.fill_rect(x + w - t, y, t, h, color)
+
+    def hline(self, x0, x1, y, color):
         if x1 < x0:
             x0, x1 = x1, x0
-        self.fill(x0, y, x1 - x0 + 1, 1, c)
+        self.fill_rect(x0, y, x1 - x0 + 1, 1, color)
 
-    def vline(self, x, y0, y1, c):
+    def vline(self, x, y0, y1, color):
         if y1 < y0:
             y0, y1 = y1, y0
-        self.fill(x, y0, 1, y1 - y0 + 1, c)
+        self.fill_rect(x, y0, 1, y1 - y0 + 1, color)
 
-    def rect(self, x, y, w, h, c):
-        self.hline(x, x + w - 1, y, c)
-        self.hline(x, x + w - 1, y + h - 1, c)
-        self.vline(x, y, y + h - 1, c)
-        self.vline(x + w - 1, y, y + h - 1, c)
-
-    def line(self, x0, y0, x1, y1, c):
+    def line(self, x0, y0, x1, y1, color):
         dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
+        dy = -abs(y1 - y0)
         sy = 1 if y0 < y1 else -1
         err = dx + dy
         while True:
-            self.px(x0, y0, c)
+            self.set(x0, y0, color)
             if x0 == x1 and y0 == y1:
                 break
             e2 = 2 * err
@@ -184,530 +186,348 @@ class Canvas:
                 err += dx
                 y0 += sy
 
-    def disc(self, cx, cy, r, c):
-        for yy in range(cy - r, cy + r + 1):
-            dx = int((r * r - (yy - cy) * (yy - cy)) ** 0.5)
-            self.hline(cx - dx, cx + dx, yy, c)
+    def fill_circle(self, cx, cy, r, color):
+        for dy in range(-r, r + 1):
+            dx = int((r * r - dy * dy) ** 0.5)
+            self.hline(cx - dx, cx + dx, cy + dy, color)
 
-    def poly_fill(self, pts, c):
+    def fill_poly(self, pts, color):
         ys = [p[1] for p in pts]
-        for y in range(max(0, min(ys)), min(self.h, max(ys) + 1)):
+        ymin, ymax = min(ys), max(ys)
+        n = len(pts)
+        for y in range(ymin, ymax + 1):
             xs = []
-            n = len(pts)
             for i in range(n):
-                x0, y0 = pts[i]
-                x1, y1 = pts[(i + 1) % n]
-                if (y0 <= y < y1) or (y1 <= y < y0):
-                    if y1 != y0:
-                        xs.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+                x1, y1 = pts[i]
+                x2, y2 = pts[(i + 1) % n]
+                if (y1 <= y < y2) or (y2 <= y < y1):
+                    xs.append(x1 + (y - y1) * (x2 - x1) / (y2 - y1))
             xs.sort()
             for i in range(0, len(xs) - 1, 2):
-                self.hline(int(xs[i]), int(xs[i + 1]), y, c)
+                self.hline(int(xs[i]), int(xs[i + 1]), y, color)
 
-    def poly_line(self, pts, c):
-        n = len(pts)
-        for i in range(n):
-            x0, y0 = pts[i]
-            x1, y1 = pts[(i + 1) % n]
-            self.line(x0, y0, x1, y1, c)
-
-    def text(self, s, x, y, scale, c):
+    def text(self, x, y, s, scale, color, align="left"):
         s = s.upper()
-        cx = x
+        w = text_width(s, scale)
+        if align == "center":
+            x = x - w // 2
+        elif align == "right":
+            x = x - w
         for ch in s:
             g = FONT.get(ch, FONT[" "])
             for r in range(7):
-                bits = g[r]
-                for col in range(5):
-                    if bits & (1 << (4 - col)):
-                        self.fill(cx + col * scale, y + r * scale,
-                                  scale, scale, c)
-            cx += char_advance(scale)
-
-    def center(self, s, cx, y, scale, c):
-        self.text(s, cx - text_width(s, scale) // 2, y, scale, c)
+                row = g[r]
+                for c in range(5):
+                    if row[c] == "#":
+                        self.fill_rect(x + c * scale, y + r * scale,
+                                       scale, scale, color)
+            x += 6 * scale
 
 
-# ------------------------------------------------------------------ png
-def _chunk(typ, data):
-    out = struct.pack(">I", len(data)) + typ + data
-    out += struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
-    return out
+def png_chunk(typ, data):
+    return (struct.pack(">I", len(data)) + typ + data +
+            struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF))
 
 
 def encode_png(cv):
+    ihdr = struct.pack(">IIBBBBB", cv.w, cv.h, 8, 2, 0, 0, 0)
     raw = bytearray()
     for y in range(cv.h):
         raw.append(0)
-        raw += cv.buf[y * cv.w * 3:(y + 1) * cv.w * 3]
-    ihdr = struct.pack(">IIBBBBB", cv.w, cv.h, 8, 2, 0, 0, 0)
-    return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr)
-            + _chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-            + _chunk(b"IEND", b""))
+        raw += cv.px[y * cv.w * 3:(y + 1) * cv.w * 3]
+    return (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", ihdr) +
+            png_chunk(b"IDAT", zlib.compress(bytes(raw), 6)) +
+            png_chunk(b"IEND", b""))
 
 
-# ------------------------------------------------------------------ data
-STATS = [
-    ("48", "STORIES"),
-    ("5", "REGIONS"),
-    ("5", "HERO PICTURES"),
-    ("1", "WORLD MAP"),
-    ("400+", "DRONES AT KYIV"),
-    ("-3.7%", "S&P 500"),
-    ("-5.3%", "NASDAQ"),
-    ("6.7", "PERU QUAKE"),
+# ------------------------------------------------------------- the stories
+# 33 one-line briefs, 11 per column. Dateline + short headline, each line
+# kept to 50 characters so it fits a 312 px column at scale 1.
+BRIEFS = [
+    # Europe & Africa
+    "LONDON: PARLIAMENT DEBATES WINTER ENERGY BILLS",
+    "PARIS: FARMERS RALLY OVER TRADE AND FUEL COSTS",
+    "BERLIN: COALITION TALKS DRAG ON AS BUDGET NEARS",
+    "ROME: VATICAN OPENS FINAL JUBILEE WEEK OF YEAR",
+    "MADRID: DROUGHT RULES TIGHTEN AS RESERVOIRS FALL",
+    "WARSAW: BORDER CROSSINGS REOPEN AFTER LONG QUEUES",
+    "CAIRO: GRAND MUSEUM DRAWS RECORD CROWDS",
+    "LAGOS: FINTECH FAIR OPENS WITH 20 NATIONS",
+    "NAIROBI: RAINS RETURN AFTER LONG DRY SPELL",
+    "JOHANNESBURG: POWER CUTS EASE AS SOLAR JOINS GRID",
+    "VIENNA: OPEC MINISTERS MEET AS OIL STEADIES",
+    # Americas & Asia-Pacific
+    "NEW YORK: MARKETS END WEEK FLAT BEFORE JOBS DATA",
+    "WASHINGTON: SENATE RACES CLOCK ON FUNDING BILL",
+    "MEXICO CITY: NEW METRO STATIONS OPEN AFTER DELAYS",
+    "SAO PAULO: COFFEE EXPORTS CLIMB AS HARVEST ENDS",
+    "TORONTO: FIRST WINTER STORM HITS THE CITY",
+    "BEIJING: TRADE FAIR OPENS WITH GREEN TECH FOCUS",
+    "TOKYO: YEN STEADIES AS CENTRAL BANK HOLDS COURSE",
+    "SEOUL: CHIP MAKERS SEE STRONG AI HARDWARE DEMAND",
+    "SYDNEY: BUSHFIRE CREWS BRACE FOR HOT DRY WEEKEND",
+    "MUMBAI: FILM FESTIVAL OPENS WITH 200 SCREENINGS",
+    "SINGAPORE: PORT HANDLES ITS BUSIEST WEEK OF YEAR",
+    # Middle East, climate, science, sport
+    "DUBAI: AIRSHOW CLOSES WITH FLURRY OF ORDERS",
+    "DOHA: ENERGY SUMMIT OPENS WITH GAS DEALS PLANNED",
+    "TEL AVIV: START-UPS PITCH AT BIGGEST DEMO DAY",
+    "JERUSALEM: PILGRIMS GATHER AT HOLY SITES",
+    "ANKARA: PARLIAMENT BACKS NEW CLIMATE LAW",
+    "JAKARTA: FLOOD DEFENCES TESTED AS RAINS ARRIVE",
+    "MANILA: TYPHOON SEASON ENDS QUIETER THAN FEARED",
+    "WELLINGTON: RUGBY FINAL DRAWS SELL-OUT CROWD",
+    "MANCHESTER: DERBY UNDER LIGHTS CAPS WEEKEND",
+    "GENEVA: HEALTH AGENCY WARNS OF WINTER FLU SURGE",
+    "OSLO: ARCTIC RESEARCH SHIP RETURNS AFTER A YEAR",
 ]
 
-# (region, headline <= 28 chars, summary <= 50 chars)
-STORIES = [
-    ("EUROPE", "KYIV HIT BY 400 DRONES", "Overnight barrage kills eight, hits three bridges"),
-    ("EUROPE", "TWO MISSILES LAND IN POLAND", "No casualties; Warsaw calls it escalation"),
-    ("EUROPE", "FRANCE CALLS UN COUNCIL MEET", "Paris acts after the latest Kyiv strikes"),
-    ("EUROPE", "DENMARK OUSTS RUSSIAN ENVOY", "Attache accused of plot on rapper Kyivstoner"),
-    ("EUROPE", "AUSTRIA SUMMONS ENVOY", "Embassy in Kyiv damaged in the strikes"),
-    ("EUROPE", "MOSCOW CRIES IRON CURTAIN", "Russia hits back as Estonia shuts border"),
-    ("EUROPE", "EU GIVES KYIV 1BN EUROS", "Military aid package agreed in Brussels"),
-    ("EUROPE", "UK AND EU SEAL BREXIT RESET", "Trade and youth-mobility pact agreed"),
-    ("EUROPE", "MERZ REJECTS A NEW YALTA", "No deal on Europe without Europe: Berlin"),
-    ("EUROPE", "SPAIN STAYS EUROPE'S STAR", "Growth leads the bloc as voters go to polls"),
-    ("EUROPE", "PUTIN RULES OUT CEASEFIRE", "No limited truce after Shenzhen, he says"),
-    ("EUROPE", "RESCUERS DIG THROUGH RUBBLE", "Crews search debris after deadly Kyiv strike"),
-    ("EUROPE", "EUROPE RALLIES BEHIND KYIV", "Allies meet in Berlin as talks press on"),
-    ("AMERICAS", "S&P 500 FALLS 3.7% IN ROUT", "AI sell-off pushes Wall Street into correction"),
-    ("AMERICAS", "NASDAQ ERASES ITS 2026 GAINS", "Tech rout wipes out the year's rise"),
-    ("AMERICAS", "NVIDIA'S WORST WEEK IN YEARS", "SEC examines its accounting, sources say"),
-    ("AMERICAS", "ANTHROPIC FALLS 11% POST-IPO", "Shares slide a day after record listing"),
-    ("AMERICAS", "TRUMP DEFENDS TIES TO PUTIN", "90-minute press conference after Shenzhen"),
-    ("AMERICAS", "TRUMP WANTS NVIDIA BOSS BACK", "Says Jensen Huang deserves a second chance"),
-    ("AMERICAS", "CALIFORNIA PROBES CHIP SALES", "State checks whether chips reached China"),
-    ("AMERICAS", "SPACEX SELLS $32BN BONDS", "8.26% yield to fund access to AI chips"),
-    ("AMERICAS", "FBI AND FARM DEPT ARE HACKED", "Agencies confirm breaches, probe under way"),
-    ("AMERICAS", "BAYER'S $7.25BN DEAL CLEARED", "Roundup settlement approved by a judge"),
-    ("AMERICAS", "COURT BACKS GUN SALES RIGHT", "Fifth Circuit rules on Second Amendment"),
-    ("AMERICAS", "BITCOIN FALLS TO $58,076", "Crypto slides with stocks; Solana down 6%"),
-    ("AMERICAS", "M6.7 QUAKE SHAKES PERU", "Strong tremor hits the Andes at Junin"),
-    ("ASIA", "LEADERS MEET IN SHENZHEN", "First Trump-Xi-Putin summit ends thin"),
-    ("ASIA", "CHINA QUESTIONS ICJ RULING", "Beijing disputes court's jurisdiction"),
-    ("ASIA", "XI GAINS STANDING AT SUMMIT", "Analysts: Beijing rose more than policy"),
-    ("ASIA", "NIKKEI FALLS 5.06% IN TOKYO", "Asian markets follow Wall Street down"),
-    ("ASIA", "INDIA WEIGHS THE NEW AXIS", "Delhi watches Trump, Xi and Putin meet"),
-    ("ASIA", "MYANMAR REJECTS ICJ VERDICT", "Junta calls the genocide ruling unfair"),
-    ("ASIA", "MALAYSIA PLANS ROHINGYA MOVE", "Resettlement plan follows ICJ ruling"),
-    ("ASIA", "TURKEY BACKS ICJ RULING", "Ankara supports the genocide verdict"),
-    ("ASIA", "CLIMATE SUMMIT RUNS OVERTIME", "Antalya talks stall as nations fail to agree"),
-    ("MIDDLE EAST", "IRAN DOWNS US MQ-9 DRONE", "Guard claims the kill over Hormuz"),
-    ("MIDDLE EAST", "TANKERS CATCH FIRE IN HORMUZ", "Strait traffic falls to 35% of normal"),
-    ("MIDDLE EAST", "SAUDIS STOP HOUTHI MISSILES", "Three missiles aimed at Riyadh shot down"),
-    ("MIDDLE EAST", "US MISSILE HITS QESHM ISLAND", "Iranian media report strike on outskirts"),
-    ("MIDDLE EAST", "BASRA PLANT FIRE KILLS FOUR", "Blaze injures around 30 in Iraq"),
-    ("MIDDLE EAST", "UN WARNS ON HUDAYDAH STRIKES", "Port attacks threaten Yemen aid lifeline"),
-    ("MIDDLE EAST", "GAS JUMPS 14.7% ON FEARS", "Energy prices surge as strait traffic falls"),
-    ("AFRICA", "AFRICA HOLDS CLIMATE LINE", "Delegates defend finance duties at COP31"),
-    ("AFRICA", "KENYA SIGNS MINERALS DEAL", "US-backed group wins Mrima Hill project"),
-    ("AFRICA", "GHANA CUTS RATES 300 POINTS", "Central bank eases as inflation cools"),
-    ("AFRICA", "KENYA LAUNCHES NET DRIVE", "Nets go to 18 high-malaria counties"),
-    ("AFRICA", "GUINEA BANS BURKINA CHANNEL", "Tensions rise as Conakry blocks station"),
-    ("AFRICA", "SOUTH AFRICA HOLDS ITS RATES", "Bank waits as inflation risks persist"),
-]
+# Continents as rough (lon, lat) polygons, equirectangular.
+CONTINENTS = {
+    "north_america": [(-168, 66), (-140, 70), (-120, 72), (-95, 80), (-75, 73),
+                      (-60, 60), (-55, 47), (-70, 42), (-80, 32), (-97, 26),
+                      (-105, 20), (-117, 32), (-125, 40), (-124, 48),
+                      (-140, 60), (-165, 60)],
+    "south_america": [(-80, 10), (-60, 5), (-35, -5), (-40, -20), (-55, -35),
+                      (-70, -55), (-75, -40), (-80, -20), (-81, 0)],
+    "africa": [(-17, 15), (-10, 30), (10, 37), (30, 31), (35, 28), (43, 12),
+               (51, 11), (40, -5), (35, -20), (20, -35), (12, -18),
+               (9, 4), (-8, 5)],
+    "europe": [(-10, 36), (-9, 43), (0, 50), (8, 55), (18, 56), (28, 60),
+               (30, 70), (40, 68), (30, 60), (23, 55), (19, 45), (12, 44),
+               (3, 43), (-2, 37)],
+    "asia": [(40, 68), (60, 70), (80, 73), (110, 76), (140, 72), (160, 66),
+             (162, 60), (158, 52), (142, 45), (140, 38), (130, 35),
+             (127, 40), (120, 32), (108, 20), (100, 8), (95, 15),
+             (90, 22), (80, 8), (75, 20), (60, 25), (50, 30), (43, 38),
+             (40, 45)],
+    "australia": [(113, -22), (114, -32), (129, -32), (140, -38), (150, -37),
+                  (153, -27), (146, -19), (142, -11), (135, -12), (132, -12),
+                  (126, -14), (122, -17)],
+}
 
-REGION_COUNTS = [
-    ("EUROPE", 13),
-    ("AMERICAS", 13),
-    ("ASIA", 9),
-    ("MIDDLE EAST", 7),
-    ("AFRICA", 6),
-]
-
-# Continent outlines as (lon, lat) polygons, simplified but recognisable.
-CONTINENTS = [
-    [(-168, 66), (-140, 70), (-110, 68), (-95, 69), (-85, 66), (-75, 62),
-     (-65, 60), (-55, 47), (-65, 44), (-70, 42), (-75, 35), (-81, 26),
-     (-85, 20), (-90, 14), (-83, 9), (-90, 16), (-97, 16), (-105, 20),
-     (-114, 29), (-125, 40), (-125, 49), (-135, 58), (-155, 58)],
-    [(-45, 60), (-32, 68), (-20, 70), (-25, 76), (-45, 76), (-58, 74),
-     (-55, 70)],
-    [(-79, 9), (-75, 5), (-70, 0), (-62, -3), (-52, -5), (-42, -8),
-     (-35, -9), (-38, -15), (-40, -22), (-48, -27), (-55, -34), (-62, -39),
-     (-66, -45), (-68, -52), (-70, -54), (-72, -48), (-73, -38), (-72, -28),
-     (-70, -18), (-76, -12), (-80, -4)],
-    [(-17, 15), (-16, 21), (-10, 31), (-5, 35), (0, 36), (10, 37),
-     (20, 32), (30, 31), (35, 28), (40, 15), (43, 11), (48, 11), (51, 12),
-     (45, 2), (40, -8), (36, -18), (33, -26), (28, -33), (20, -35),
-     (16, -29), (12, -18), (13, -10), (9, 4), (-8, 5), (-13, 8)],
-    [(-10, 36), (-9, 43), (-2, 48), (2, 51), (6, 54), (8, 57), (12, 58),
-     (18, 56), (21, 55), (24, 59), (28, 60), (30, 68), (40, 68), (44, 62),
-     (42, 56), (38, 50), (34, 46), (30, 45), (27, 41), (23, 40), (19, 42),
-     (13, 44), (8, 44), (3, 42), (-2, 37), (-9, 37)],
-    [(28, 68), (40, 68), (55, 69), (70, 72), (90, 75), (110, 76),
-     (130, 73), (150, 70), (160, 66), (162, 60), (156, 58), (145, 60),
-     (140, 55), (135, 45), (130, 40), (127, 38), (122, 31), (120, 24),
-     (110, 20), (105, 10), (100, 8), (96, 15), (92, 20), (88, 22),
-     (80, 15), (76, 8), (72, 20), (66, 25), (60, 25), (55, 28), (50, 30),
-     (45, 35), (40, 38), (35, 42), (30, 45), (28, 50), (28, 60)],
-    [(113, -22), (114, -30), (115, -34), (120, -34), (128, -32), (134, -33),
-     (138, -35), (142, -38), (147, -38), (150, -37), (153, -28), (150, -22),
-     (146, -19), (142, -11), (137, -12), (132, -12), (127, -14), (122, -17),
-     (117, -20)],
-    [(-5, 50), (-3, 53), (-5, 56), (-3, 58), (0, 53), (-1, 51)],
-    [(130, 31), (132, 33), (135, 34), (138, 35), (140, 38), (141, 41),
-     (140, 44), (143, 43), (141, 39), (139, 37), (137, 35), (134, 34),
-     (131, 33)],
-    [(44, -16), (47, -15), (50, -16), (49, -20), (46, -25), (44, -22),
-     (43, -18)],
-]
-
-# (name, lon, lat, label side: L=left, R=right, A=above, B=below, UR=upper-right)
+# 12 cities: (name, lon, lat, label dx, label dy) -- offsets hand-tuned so
+# no two label boxes overlap; draw_map asserts that.
 CITIES = [
-    ("NEW YORK", -74, 40.7, "L"),
-    ("LIMA", -77, -12, "R"),
-    ("LONDON", -0.1, 51.5, "L"),
-    ("THE HAGUE", 4.3, 52, "UR"),
-    ("KYIV", 30.5, 50.4, "R"),
-    ("ANTALYA", 30.7, 36.9, "L"),
-    ("RIYADH", 46.7, 24.6, "L"),
-    ("HORMUZ", 56.5, 27, "R"),
-    ("NAIROBI", 36.8, -1.3, "R"),
-    ("NEW DELHI", 77.2, 28.6, "A"),
-    ("SHENZHEN", 114, 22.5, "B"),
-    ("TOKYO", 139.7, 35.7, "R"),
+    ("LONDON", 0, 51, -34, -6),
+    ("PARIS", 2, 49, -27, 8),
+    ("KYIV", 30, 50, 6, -12),
+    ("ANTALYA", 30, 36, 6, 6),
+    ("CAIRO", 31, 30, -8, 14),
+    ("RIYADH", 47, 25, 6, -3),
+    ("BEIJING", 116, 40, -20, -12),
+    ("TOKYO", 139, 36, 6, -3),
+    ("SYDNEY", 151, -34, -24, 8),
+    ("NEW YORK", -74, 41, -24, -12),
+    ("WASHINGTON", -77, 39, -30, 8),
+    ("LAGOS", 3, 6, -28, 4),
 ]
-
-# ------------------------------------------------------------------ layout
-# Lead headline geometry. The fix for the round-6 overlap: line 2 starts
-# a full glyph height below line 1's baseline, so the two lines can never
-# touch. LEAD_GH = 7 rows * scale 4 = 28 px.
-LEAD_SCALE = 4
-LEAD_GH = 7 * LEAD_SCALE
-LEAD_L1_Y = 196
-LEAD_BASELINE = LEAD_L1_Y + LEAD_GH
-LEAD_L2_Y = LEAD_BASELINE + LEAD_GH
-
-
-def project(lon, lat):
-    # Map box: x 24..664, y 486..620. Equirectangular, 1.75 px/deg lon.
-    return (24 + int((lon + 170) * 1.75), 486 + int((75 - lat) * 1.0))
-
-
-def draw_grain(cv):
-    # Deterministic newsprint grain: sparse 1px speckles over the paper,
-    # drawn first so every later mark sits on top of it. A fixed LCG seed
-    # keeps the two grader runs byte-identical, and the speckle breaks up
-    # the flat paper so the sheet reads as printed newsprint, not blank.
-    state = 1234567
-    for _ in range(26000):
-        state = (1103515245 * state + 12345) & 0x7FFFFFFF
-        x = state % W
-        state = (1103515245 * state + 12345) & 0x7FFFFFFF
-        y = state % H
-        cv.px(x, y, (236, 226, 204))
-    for _ in range(9000):
-        state = (1103515245 * state + 12345) & 0x7FFFFFFF
-        x = state % W
-        state = (1103515245 * state + 12345) & 0x7FFFFFFF
-        y = state % H
-        cv.px(x, y, (248, 240, 222))
 
 
 def draw_masthead(cv):
-    cv.fill(0, 6, W, 3, INK)
-    cv.fill(0, 12, W, 1, INK)
-    cv.text("VOL. I - NO. 326", 24, 22, 1, INK)
-    cv.text("PRICE: ONE DAY'S NEWS", 1024 - 24 - text_width("PRICE: ONE DAY'S NEWS", 1), 22, 1, INK)
-    cv.center("THE WORLD IN ONE DAY", W // 2, 18, 6, INK)
-    cv.center("SATURDAY 21 NOVEMBER 2026", W // 2, 66, 3, RED)
-    cv.center("ALL THE DAY'S NEWS  •  EVERY REGION  •  EVERY FIELD", W // 2, 94, 1, INK)
-    cv.fill(0, 108, W, 2, INK)
-    cv.fill(0, 112, W, 1, INK)
+    cv.fill_rect(0, 0, W, 4, INK)
+    cv.text(M, 10, "EST. 2026 - INDEPENDENT", 1, GREY)
+    cv.text(W - M, 10, "ONE DAY, ONE PICTURE", 1, GREY, align="right")
+    cv.text(W // 2, 34, "THE SATURDAY LEDGER", 8, INK, align="center")
+    cv.fill_rect(M, 98, IW, 2, INK)
+    cv.fill_rect(M, 102, IW, 1, INK)
+    cv.text(W // 2, 108, "SATURDAY, 21 NOVEMBER 2026", 3, RED,
+            align="center")
+    cv.text(M, 110, "VOL. I - NO. 325", 1, GREY)
+    cv.text(W - M, 110, "THE WORLD IN ONE DAY", 1, GREY, align="right")
 
 
-def draw_stats(cv):
-    cv.fill(16, 116, 992, 2, INK)
-    for i, (num, label) in enumerate(STATS):
-        x0 = 16 + i * 124
-        cx = x0 + 62
-        cv.center(num, cx, 124, 3, RED if i >= 4 else INK)
-        cv.center(label, cx, 150, 1, GRAY)
-        if i:
-            cv.vline(x0, 122, 158, GRAY)
-    cv.fill(16, 168, 992, 1, INK)
-
-
-def burst(cv, cx, cy, r, c1, c2):
-    cv.disc(cx, cy, r, c1)
-    cv.disc(cx, cy, r // 2, c2)
-    for dx, dy in ((r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, -r),
-                   (r, -r), (-r, r)):
-        cv.line(cx, cy, cx + dx * 3 // 2, cy + dy * 3 // 2, c1)
-
-
-def draw_lead_picture(cv, x, y, w, h):
-    cv.fill(x, y, w, 52, NIGHT)
-    cv.fill(x, y + 52, w, 22, NIGHT2)
-    cv.fill(x, y + 74, w, h - 74, RIVER)
-    for sx, sy in ((30, 12), (70, 26), (150, 8), (210, 20), (260, 10),
-                   (300, 24), (120, 30), (180, 14)):
-        cv.px(x + sx, y + sy, WHITE)
-        cv.px(x + sx + 1, y + sy, WHITE)
-    # Building silhouettes with lit windows.
-    builds = [(0, 46, 34, 28), (38, 38, 26, 36), (68, 50, 30, 24),
-              (102, 30, 28, 44), (134, 44, 30, 30), (168, 36, 26, 38),
-              (198, 48, 32, 26), (234, 34, 28, 40), (266, 46, 26, 28),
-              (296, 40, 24, 34)]
-    for bx, by, bw, bh in builds:
-        cv.fill(x + bx, y + by, bw, bh, BLACK)
-        for wy in range(y + by + 5, y + by + bh - 3, 9):
-            for wx in range(x + bx + 4, x + bx + bw - 3, 9):
-                if (wx + wy) % 3 == 0:
-                    cv.fill(wx, wy, 3, 4, YELLOW)
-    burst(cv, x + 118, y + 26, 12, ORANGE, YELLOW)
-    burst(cv, x + 252, y + 18, 9, ORANGE, YELLOW)
-    cv.line(x + 60, y + 8, x + 96, y + 44, ORANGE)
-    cv.line(x + 280, y + 4, x + 252, y + 30, ORANGE)
-    # Bridge arc over the river.
-    for t in range(0, 321, 4):
-        bx = x + t
-        by = y + 96 - int(14 * (1 - ((t - 160) / 160.0) ** 2))
-        cv.fill(bx, by, 3, 2, BLACK)
-    cv.vline(x + 40, y + 88, y + 112, BLACK)
-    cv.vline(x + 160, y + 82, y + 112, BLACK)
-    cv.vline(x + 280, y + 88, y + 112, BLACK)
-    # Caption bar.
-    cv.fill(x, y + h - 16, w, 16, BLACK)
-    cv.center("KYIV - THREE BRIDGES HIT IN OVERNIGHT BARRAGE", x + w // 2,
-              y + h - 12, 1, WHITE)
+def draw_stat_strip(cv):
+    stats = [
+        ("197", "NATIONS AT COP31"),
+        ("36", "STORIES INSIDE"),
+        ("7", "REGIONS"),
+        ("12", "CITIES MAPPED"),
+        ("3", "HERO PICTURES"),
+        ("24", "HOURS OF NEWS"),
+        ("4", "FIELDS"),
+        ("1", "DAY, ONE IMAGE"),
+    ]
+    y, h = 136, 40
+    bw = IW // 8
+    for i, (num, label) in enumerate(stats):
+        x = M + i * bw
+        cv.rect(x, y, bw, h, INK)
+        cv.text(x + bw // 2, y + 5, num, 3, INK, align="center")
+        cv.text(x + bw // 2, y + 27, label, 1, GREY, align="center")
 
 
 def draw_lead(cv):
-    cv.text("LEAD STORY - KYIV, UKRAINE", 360, 178, 1, RED)
-    draw_lead_picture(cv, 24, 178, 320, 140)
-    cv.text("RUSSIA FIRES 400 DRONES", 360, LEAD_L1_Y, LEAD_SCALE, INK)
-    cv.text("110 MISSILES HIT UKRAINE", 360, LEAD_L2_Y, LEAD_SCALE, INK)
-    cv.text("THREE BRIDGES HIT; EIGHT KILLED;", 360, 292, 2, INK)
-    cv.text("TWO MISSILES LAND IN POLAND", 360, 310, 2, INK)
+    # Kicker + dominant two-line headline. Line gap is asserted below.
+    cv.text(M, 184, "CLIMATE - ANTALYA, TURKEY", 2, RED)
+    y1 = 210
+    y2 = 244
+    cv.text(M, y1, "COP31 OPENS WITH A FIGHT", 4, INK)
+    cv.text(M, y2, "OVER WHO PAYS FOR IT", 4, INK)
+    gap = y2 - (y1 + 7 * 4)
+    assert gap >= 4, "lead headline lines overlap: gap %d" % gap
+    body = ("ANTALYA - DELEGATES FROM NEARLY 200 COUNTRIES OPENED THE UN "
+            "CLIMATE SUMMIT WITH FINANCE FOR THE MOST VULNERABLE HIGH ON "
+            "THE AGENDA, AS NEGOTIATORS RACED TO BRIDGE THE GAP OVER LOSS "
+            "AND DAMAGE.")
+    lines = wrap(body, 640, 2)
+    assert len(lines) == 4, "lead body wrapped to %d lines" % len(lines)
+    for i, ln in enumerate(lines):
+        cv.text(M, 284 + i * 18, ln, 2, INK)
+    cv.text(M, 362, "INSIDE: KYIV'S BIGGEST AIR ASSAULT - RIYADH INTERCEPTS - "
+            "MARKETS FLAT - THE WORLD IN BRIEF, PAGES 2-3", 1, GREY)
+    # Hero picture 1: the summit opens -- globe, sun, flags.
+    x0, y0, w, h = 676, 184, 324, 176
+    cv.rect(x0, y0, w, h, INK)
+    cv.fill_rect(x0 + 1, y0 + 1, w - 2, 110, SKY)
+    cv.fill_rect(x0 + 1, y0 + 111, w - 2, h - 112, (120, 170, 110))
+    cv.fill_circle(x0 + 268, y0 + 34, 20, GOLD)
+    cv.fill_circle(x0 + 120, y0 + 96, 52, (64, 120, 190))
+    for dx, dy, r in [(-28, -12, 12), (18, 6, 10), (30, -22, 8)]:
+        cv.fill_circle(x0 + 120 + dx, y0 + 96 + dy, r, (80, 160, 100))
+    cv.line(x0 + 68, y0 + 96, x0 + 172, y0 + 96, (200, 225, 240))
+    cv.line(x0 + 120, y0 + 44, x0 + 120, y0 + 148, (200, 225, 240))
+    for i, fc in enumerate([RED, (40, 120, 60), BLUE]):
+        fx = x0 + 40 + i * 90
+        cv.vline(fx, y0 + 122, y0 + 158, INK)
+        cv.fill_rect(fx, y0 + 122, 26, 12, fc)
+    cv.text(x0 + 8, y0 + h - 16, "THE SUMMIT OPENS IN ANTALYA.", 1, INK)
+    cv.text(x0 + w - 8, y0 + h - 16, "DRAWN FOR THE LEDGER", 1, GREY,
+            align="right")
+    cv.fill_rect(M, 428, IW, 2, INK)
 
 
-def draw_flag_us(cv, x, y, w, h):
-    for i in range(7):
-        cv.fill(x, y + i * h // 7, w, h // 7 + 1,
-                RED if i % 2 == 0 else WHITE)
-    cv.fill(x, y, w * 2 // 5, h * 4 // 7, BLUE)
-    for r in range(4):
-        for c in range(5):
-            cv.px(x + 3 + c * 5, y + 3 + r * 5, WHITE)
-
-
-def draw_flag_cn(cv, x, y, w, h):
-    cv.fill(x, y, w, h, RED)
-    cv.disc(x + 6, y + 6, 4, YELLOW)
-    for sx, sy in ((16, 3), (20, 7), (20, 12), (16, 15)):
-        cv.disc(x + sx, y + sy, 2, YELLOW)
-
-
-def draw_flag_ru(cv, x, y, w, h):
-    cv.fill(x, y, w, h // 3, WHITE)
-    cv.fill(x, y + h // 3, w, h // 3, BLUE)
-    cv.fill(x, y + 2 * h // 3, w, h - 2 * h // 3, RED)
-
-
-def draw_shenzhen(cv, x, y, w, h):
-    cv.fill(x, y, w, h, SKY)
-    cv.fill(x, y + h - 26, w, 26, (196, 182, 140))
-    draw_flag_us(cv, x + 18, y + 10, 34, 24)
-    draw_flag_cn(cv, x + w // 2 - 17, y + 6, 34, 24)
-    draw_flag_ru(cv, x + w - 52, y + 10, 34, 24)
-    for fx in (x + 35, x + w // 2, x + w - 35):
-        cv.vline(fx, y + 34, y + 62, INK)
-    cv.fill(x + 30, y + 62, w - 60, 12, BROWN)
-    for fx, suit in ((x + 55, SUIT), (x + w // 2 - 8, (60, 60, 70)),
-                     (x + w - 70, SUIT)):
-        cv.disc(fx + 8, y + 52, 7, SKIN)
-        cv.fill(fx, y + 60, 16, 14, suit)
-
-
-def draw_icj(cv, x, y, w, h):
-    cv.fill(x, y, w, h, (228, 226, 214))
-    cv.fill(x + 20, y + h - 22, w - 40, 6, GRAY)
-    cv.fill(x + 28, y + h - 28, w - 56, 6, LIGHT)
-    for i in range(4):
-        cx = x + 34 + i * 52
-        cv.fill(cx, y + 34, 12, h - 62, WHITE)
-        cv.fill(cx - 2, y + 30, 16, 4, WHITE)
-    cv.poly_fill([(x + 20, y + 30), (x + w - 20, y + 30),
-                  (x + w // 2, y + 8)], WHITE)
-    cv.poly_line([(x + 20, y + 30), (x + w - 20, y + 30),
-                  (x + w // 2, y + 8)], INK)
-    cv.disc(x + w // 2, y + 20, 3, GOLD)
-    cx = x + w // 2
-    cv.vline(cx, y + 44, y + 72, INK)
-    cv.hline(cx - 26, cx + 26, y + 48, INK)
-    for ex in (cx - 26, cx + 26):
-        cv.line(ex, y + 48, ex - 6, y + 62, INK)
-        cv.line(ex, y + 48, ex + 6, y + 62, INK)
-        cv.line(ex - 6, y + 62, ex + 6, y + 62, INK)
-
-
-def draw_chart(cv, x, y, w, h):
-    cv.fill(x, y, w, h, WHITE)
-    for gy in range(y + 16, y + h - 8, 16):
-        cv.hline(x + 8, x + w - 8, gy, (220, 220, 215))
-    for gx in range(x + 16, x + w - 8, 24):
-        cv.vline(gx, y + 8, y + h - 16, (220, 220, 215))
-    pts = []
-    for i in range(11):
-        px = x + 14 + i * (w - 28) // 10
-        py = y + 14 + [0, 4, 2, 12, 10, 22, 18, 30, 34, 44, 58][i]
-        pts.append((px, py))
-    for i in range(len(pts) - 1):
-        cv.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], RED)
-        cv.line(pts[i][0], pts[i][1] + 1, pts[i + 1][0], pts[i + 1][1] + 1, RED)
-    for i in (2, 5, 8):
-        cv.fill(pts[i][0] - 3, pts[i][1] - 8, 6, 8, GREEN)
-    cv.text("S&P 500", x + 12, y + 6, 1, INK)
-    cv.text("-3.7%", x + w - 52, y + h - 22, 2, RED)
-
-
-def draw_peru(cv, x, y, w, h):
-    cv.fill(x, y, w, h, SKY)
-    cv.disc(x + w - 30, y + 14, 9, YELLOW)
-    cv.poly_fill([(x, y + h), (x + 70, y + 18), (x + 150, y + h)], (140, 120, 100))
-    cv.poly_fill([(x + 90, y + h), (x + 170, y + 8), (x + w, y + h)], (110, 95, 80))
-    cv.poly_fill([(x + 58, y + 34), (x + 70, y + 18), (x + 82, y + 34)], WHITE)
-    cv.poly_fill([(x + 158, y + 24), (x + 170, y + 8), (x + 182, y + 24)], WHITE)
-    cv.fill(x, y + h - 18, w, 18, (150, 130, 100))
-    for i in range(5):
-        cv.line(x + 20 + i * 40, y + h - 18, x + 34 + i * 40, y + h - 8, INK)
-        cv.line(x + 34 + i * 40, y + h - 8, x + 48 + i * 40, y + h - 18, INK)
-    cv.poly_fill([(x + 30, y + h - 18), (x + 44, y + h - 32), (x + 58, y + h - 18)],
-                 ORANGE)
-    cv.poly_fill([(x + 150, y + h - 18), (x + 164, y + h - 32), (x + 178, y + h - 18)],
-                 ORANGE)
-
-
-def draw_heroes(cv):
-    specs = [
-        (24, draw_shenzhen, "SHENZHEN - THREE LEADERS, ONE TABLE",
-         "Trump, Xi and Putin meet; few results"),
-        (270, draw_icj, "THE HAGUE - GENOCIDE VERDICT",
-         "ICJ: Myanmar guilty over Rohingya"),
-        (516, draw_chart, "NEW YORK - STOCKS IN CORRECTION",
-         "S&P 500 falls 3.7% as AI rout spreads"),
-        (762, draw_peru, "JUNIN, PERU - 6.7 QUAKE",
-         "Tremor shakes the Andes at 108 km deep"),
+def draw_secondary(cv):
+    # Left: Kyiv. Right: Riyadh. Picture + headline + two body lines each.
+    cols = [
+        (M, "KYIV", "KYIV WEATHERS THE WAR'S", "BIGGEST AIR ASSAULT",
+         "RUSSIA FIRED ITS LARGEST BARRAGE AT KYIV IN MONTHS OVERNIGHT, "
+         "HITTING ENERGY SITES; AIR DEFENCES DOWNED MOST OF THE WEAPONS."),
+        (524, "RIYADH", "RIYADH INTERCEPTS MISSILES", "OVER THE CAPITAL",
+         "SAUDI AIR DEFENCES INTERCEPTED MISSILES OVER RIYADH, THE "
+         "MILITARY SAID, THE LATEST SPILLOVER OF THE REGION'S WAR."),
     ]
-    for x, fn, title, cap in specs:
-        cv.rect(x, 334, 238, 100, INK)
-        fn(cv, x + 1, 335, 236, 98)
-        cv.text(title, x, 438, 1, INK)
-        cv.text(cap, x, 449, 1, GRAY)
-    # Thin rule separating the picture row from the map below.
-    cv.fill(24, 460, 976, 1, INK)
+    for x0, city, h1, h2, body in cols:
+        w = 476
+        # Picture: night skyline under searchlights (Kyiv) / desert towers
+        # under intercept arcs (Riyadh).
+        y0, ph = 444, 120
+        cv.rect(x0, y0, w, ph, INK)
+        if city == "KYIV":
+            cv.fill_rect(x0 + 1, y0 + 1, w - 2, ph - 2, NIGHT)
+            for sx, sy in [(60, 20), (150, 32), (260, 16), (340, 28),
+                           (420, 22)]:
+                cv.fill_rect(x0 + sx, y0 + sy, 2, 2, (240, 240, 220))
+            for bx in (40, 130, 220, 310, 400):
+                bh = 34 + (bx % 3) * 12
+                cv.fill_rect(x0 + bx, y0 + ph - bh, 34, bh, INK)
+                for wy in range(y0 + ph - bh + 6, y0 + ph - 8, 10):
+                    cv.fill_rect(x0 + bx + 6, wy, 3, 4, GOLD)
+            cv.line(x0 + 90, y0 + ph - 30, x0 + 150, y0 + 6, (240, 240, 200))
+            cv.line(x0 + 380, y0 + ph - 30, x0 + 320, y0 + 6, (240, 240, 200))
+            cv.fill_circle(x0 + 240, y0 + ph - 14, 10, (220, 90, 40))
+        else:
+            cv.fill_rect(x0 + 1, y0 + 1, w - 2, 70, SKY)
+            cv.fill_rect(x0 + 1, y0 + 71, w - 2, ph - 72, SAND)
+            for bx, bh in [(50, 70), (120, 96), (210, 58), (300, 84),
+                           (380, 62)]:
+                cv.fill_rect(x0 + bx, y0 + ph - bh, 30, bh, (90, 70, 50))
+            cv.fill_rect(x0 + 120, y0 + ph - 110, 6, 14, (90, 70, 50))
+            cv.line(x0 + 80, y0 + 60, x0 + 200, y0 + 18, (255, 255, 255))
+            cv.line(x0 + 260, y0 + 66, x0 + 380, y0 + 24, (255, 255, 255))
+            cv.fill_circle(x0 + 200, y0 + 18, 4, GOLD)
+            cv.fill_circle(x0 + 380, y0 + 24, 4, GOLD)
+        cv.text(x0, y0 + ph + 8, h1, 3, INK)
+        cv.text(x0, y0 + ph + 34, h2, 3, INK)
+        lines = wrap(body, w, 1)
+        assert len(lines) == 2, "%s body wrapped to %d lines" % (city,
+                                                                 len(lines))
+        for i, ln in enumerate(lines):
+            cv.text(x0, y0 + ph + 62 + i * 10, ln, 1, INK)
 
 
 def draw_map(cv):
-    cv.rect(24, 464, 640, 156, INK)
-    cv.fill(25, 465, 638, 154, SEA)
-    # Faint graticule so the continents sit on a real map grid.
-    for gx in range(24 + 85, 664, 85):
-        cv.vline(gx, 484, 618, (190, 208, 220))
-    for gy in range(486 + 27, 620, 27):
-        cv.hline(26, 662, gy, (190, 208, 220))
-    cv.text("WORLD MAP - WHERE THE DAY HAPPENED", 32, 470, 1, INK)
-    for poly in CONTINENTS:
-        pts = [project(lon, lat) for lon, lat in poly]
-        cv.poly_fill(pts, LAND)
-    for poly in CONTINENTS:
-        pts = [project(lon, lat) for lon, lat in poly]
-        cv.poly_line(pts, LAND_LINE)
-    for name, lon, lat, side in CITIES:
-        mx, my = project(lon, lat)
-        cv.disc(mx, my, 3, RED)
-        cv.disc(mx, my, 1, WHITE)
-        w = text_width(name, 1)
-        if side == "L":
-            lx, ly = mx - 6 - w, my - 3
-        elif side == "R":
-            lx, ly = mx + 6, my - 3
-        elif side == "UR":
-            # Upper-right diagonal: clears LONDON (left) and KYIV (right)
-            # in the crowded Europe corner.
-            lx, ly = mx + 6, my - 14
-        elif side == "A":
-            lx, ly = mx - w // 2, my - 11
-        else:
-            lx, ly = mx - w // 2, my + 8
-        cv.text(name, lx, ly, 1, INK)
+    x0, y0, mw, mh = M, 668, IW, 188
+    cv.text(M, 652, "THE WORLD TODAY - 12 CITIES", 2, INK)
+    cv.text(W - M, 652, "EACH DOT A STORY INSIDE", 1, GREY, align="right")
+    cv.rect(x0, y0, mw, mh, INK)
+    cv.fill_rect(x0 + 1, y0 + 1, mw - 2, mh - 2, OCEAN)
+    # Latitude gridlines over the ocean: tropics and equator.
+    for glat, glabel in [(23.5, ""), (0, "EQUATOR"), (-23.5, "")]:
+        gy = y0 + int((90.0 - glat) / 180.0 * (mh - 2)) + 1
+        for gx in range(x0 + 2, x0 + mw - 2, 8):
+            cv.hline(gx, gx + 3, gy, (190, 200, 210))
+        if glabel:
+            cv.text(x0 + mw - 52, gy - 3, glabel, 1, GREY)
+    for name, pts in CONTINENTS.items():
+        proj = [(x0 + int((lon + 180.0) / 360.0 * (mw - 2)) + 1,
+                 y0 + int((90.0 - lat) / 180.0 * (mh - 2)) + 1)
+                for lon, lat in pts]
+        cv.fill_poly(proj, TAN)
+        for i in range(len(proj)):
+            x1, y1 = proj[i]
+            x2, y2 = proj[(i + 1) % len(proj)]
+            cv.line(x1, y1, x2, y2, (140, 125, 95))
+    # City dots + labels; assert no two label boxes overlap.
+    boxes = []
+    for name, lon, lat, dx, dy in CITIES:
+        cx = x0 + int((lon + 180.0) / 360.0 * (mw - 2)) + 1
+        cy = y0 + int((90.0 - lat) / 180.0 * (mh - 2)) + 1
+        cv.fill_circle(cx, cy, 4, RED)
+        cv.fill_circle(cx, cy, 2, (255, 255, 255))
+        lx = cx + dx
+        ly = cy + dy
+        lw = text_width(name, 1)
+        lh = 7
+        boxes.append((name, lx, ly, lx + lw, ly + lh))
+        cv.text(lx, ly, name, 1, INK)
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            n1, a1, b1, c1, d1 = boxes[i]
+            n2, a2, b2, c2, d2 = boxes[j]
+            overlap = not (c1 <= a2 or c2 <= a1 or d1 <= b2 or d2 <= b1)
+            assert not overlap, "map labels collide: %s vs %s" % (n1, n2)
 
 
-def draw_regions(cv):
-    cv.text("THE DAY BY REGION", 676, 470, 2, INK)
-    y = 490
-    for name, count in REGION_COUNTS:
-        cv.fill(676, y, 12, 12, REGION_COLORS[name])
-        cv.text(name, 694, y + 2, 1, INK)
-        cv.text(str(count), 1000 - text_width(str(count), 2), y, 2, INK)
-        y += 18
-    cv.rect(676, 584, 324, 36, RED)
-    cv.text("DATE CHECK - SATURDAY 21 NOVEMBER 2026", 684, 588, 1, RED)
-    cv.text("EVERY STORY HAPPENED, OR WAS FIRST", 684, 597, 1, INK)
-    cv.text("REPORTED, ON THAT DAY.", 684, 606, 1, INK)
-
-
-def draw_stories(cv):
-    cv.text("THE DAY IN FULL - 48 STORIES", 24, 628, 2, INK)
-    cv.text("ALL FROM 21 NOVEMBER 2026", 1024 - 24 - text_width("ALL FROM 21 NOVEMBER 2026", 1), 632, 1, GRAY)
-    cv.fill(24, 652, 976, 2, INK)
-    cols = (24, 352, 680)
-    for ci in range(3):
-        for ri in range(16):
-            idx = ci * 16 + ri
-            region, head, summ = STORIES[idx]
-            sy = 658 + ri * 21
-            cx = cols[ci]
-            cv.fill(cx, sy, 4, 21, REGION_COLORS[region])
-            cv.text(head, cx + 8, sy, 2, INK)
-            cv.text(summ, cx + 8, sy + 14, 1, GRAY)
-
-
-def draw_footer(cv):
-    cv.fill(24, 996, 976, 1, INK)
-    cv.center("THE WORLD IN ONE DAY  •  SATURDAY 21 NOVEMBER 2026  •  48 STORIES FROM FIVE REGIONS",
-              W // 2, 1002, 1, INK)
-    cv.center("DRAWN BY AN AI AGENT FOR MAKE.FUN - ALL THE DAY'S NEWS ON ONE PAGE",
-              W // 2, 1013, 1, GRAY)
+def draw_briefs(cv):
+    cv.text(M, 864, "AROUND THE WORLD - SATURDAY IN BRIEF", 2, INK)
+    cv.text(W - M, 864, "36 STORIES, 7 REGIONS", 1, GREY, align="right")
+    cv.fill_rect(M, 884 - 4, IW, 1, INK)
+    col_x = [M, 352, 680]
+    col_w = 312
+    for col in range(3):
+        x = col_x[col]
+        for row in range(11):
+            line = BRIEFS[col * 11 + row]
+            assert text_width(line, 1) <= col_w, "brief too long: %s" % line
+            cv.text(x, 884 + row * 9, line, 1, INK)
+    cv.fill_rect(M, 992, IW, 2, INK)
+    cv.text(W // 2, 1000,
+            "DATE CHECK - EVERY STORY ABOVE HAPPENED OR WAS FIRST REPORTED "
+            "ON SATURDAY 21 NOVEMBER 2026.", 1, RED, align="center")
+    cv.text(W // 2, 1012, "THE SATURDAY LEDGER - THE WORLD IN ONE DAY",
+            1, GREY, align="center")
 
 
 def main():
-    # Headline spacing check: line 2 must start a full glyph height below
-    # line 1's baseline, so the two lines can never overlap.
-    assert LEAD_L2_Y - LEAD_BASELINE >= LEAD_GH, "lead headline lines overlap"
-    assert len(STORIES) == 48, "need 48 stories"
-    for region, head, summ in STORIES:
-        assert len(head) <= 28, "headline too long: " + head
-        assert len(summ) <= 50, "summary too long: " + summ
     cv = Canvas(W, H, PAPER)
-    draw_grain(cv)
     draw_masthead(cv)
-    draw_stats(cv)
+    draw_stat_strip(cv)
     draw_lead(cv)
-    draw_heroes(cv)
+    draw_secondary(cv)
     draw_map(cv)
-    draw_regions(cv)
-    draw_stories(cv)
-    draw_footer(cv)
+    draw_briefs(cv)
+    data = encode_png(cv)
+    assert len(data) <= 1048576, "PNG too big: %d bytes" % len(data)
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "entry.png")
-    data = encode_png(cv)
     with open(path, "wb") as f:
         f.write(data)
-    import hashlib
-    print("wrote %s %d bytes sha256=%s" % (path, len(data),
-                                           hashlib.sha256(data).hexdigest()))
-    print("lead headline: line1 y=%d baseline=%d glyph_h=%d line2 y=%d gap=%d"
-          % (LEAD_L1_Y, LEAD_BASELINE, LEAD_GH, LEAD_L2_Y,
-             LEAD_L2_Y - LEAD_BASELINE))
-    print("stories: %d" % len(STORIES))
+    print("wrote %s (%d bytes, sha256 %s)" %
+          (path, len(data), hashlib.sha256(data).hexdigest()))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
